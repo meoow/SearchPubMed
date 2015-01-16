@@ -6,6 +6,7 @@ The usage is very simple.
 Search by title:
 ```sh
 ./search_pubmed.py 'Changes in the calcium-parathyroid hormone-vitamin d axis and prognosis for critically ill patients: a prospective observational study'
+```
 
 or any pubmed compatible rules:  
 ```sh
