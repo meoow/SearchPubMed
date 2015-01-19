@@ -3,6 +3,7 @@
 import urllib, urllib2, urlparse
 from xml.etree import ElementTree
 import sys
+from contextlib import closing
 
 URLBASE = 'http://eutils.ncbi.nlm.nih.gov/entrez/eutils/'
 UID_FACE = 'esearch.fcgi'
@@ -24,7 +25,7 @@ def get_doi_link(doiterm):
 	h_referer = 'http://www.doi.org/'
 	h_ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.8; rv:31.0) Gecko/20100101 Firefox/31.0'
 	h_accept_enc = 'gzip, deflate'
-	h_cookie = None
+	h_cookie = ''
 	post_data = urllib.urlencode({'hdl':doiterm})
 
 	noreopener = urllib2.build_opener(NoRedirect)
@@ -42,49 +43,40 @@ def get_doi_link(doiterm):
 		if h_cookie is not None:
 			req.add_header('Cookie', h_cookie)
 
-		resp = noreopener.open(req)
+		print req.headers
 
-		post_data = None
-		if resp.code in (301, 302, 303):
-			cookie = '; '.join(j[1].rstrip()
-				for j in (i.split(": ",1) 
-					for i in resp.headers.headers ) if j[0]=='Set-Cookie')
-			if cookie != '':
-				h_cookie = cookie
+		with closing(noreopener.open(req)) as resp:
+			post_data = None
+			print resp.code
+			if resp.code in (301, 302, 303):
+				cookie = resp.headers.getheader('set-cookie')
+				if cookie is not None:
+					if h_cookie != '':
+						h_cookie += '; '+cookie
+					else:
+						h_cookie = cookie
+
+				location = resp.headers.getheader('location')
+				h_host = urlparse.urlparse(location).netloc
+				urlbase = location
+				print urlbase
 			else:
-				h_cookie = None
+				break
 
-			location = [j[1].rstrip()
-					for j in (i.split(": ",1) 
-						for i in resp.headers.headers ) if j[0]=='Location']
-			h_host = urlparse.urlparse(location[0]).netloc
-			urlbase = location[0]
-		else:
-			break
-
-	resp.close()
 	return resp.url
 
 def get_uid(term):
-
-	tree = ElementTree.parse(
-			urllib2.urlopen(URLBASE + UID_FACE, 
-			urllib.urlencode({
-				'db':'pubmed', 
-				'term': term
-				})))
-
+	with closing(urllib2.urlopen(URLBASE + UID_FACE, 
+			urllib.urlencode({ 'db':'pubmed', 'term': term }))) as resp:
+		tree = ElementTree.parse(resp)
 	return [i.text for i in tree.findall('.//IdList/Id')]
 
 def get_summary(*uid):
 
-	tree = ElementTree.parse(
-			urllib2.urlopen(URLBASE + SUMM_FACE,
-			urllib.urlencode({
-				'db':'pubmed',
-				'version':'2.0',
-				'id': ','.join(uid)})))
-
+	with closing(urllib2.urlopen(URLBASE + SUMM_FACE,
+			urllib.urlencode({ 'db':'pubmed', 'version':'2.0',
+				'id': ','.join(uid)}))) as resp:
+		tree = ElementTree.parse(resp)
 	return tree
 
 def parse_paper(etree):
@@ -113,13 +105,11 @@ def parse_paper(etree):
 	return summ
 
 def get_abstract(*term):
-
-	tree = ElementTree.parse(
-			urllib2.urlopen(URLBASE + ABST_FACE,
-			urllib.urlencode({
-				'db':'pubmed',
-				'rettype':'xml', 
-				'id': ','.join(str(i) for i in term)})))
+	
+	with closing(urllib2.urlopen(URLBASE + ABST_FACE,
+			urllib.urlencode({ 'db':'pubmed', 'rettype':'xml', 
+				'id': ','.join(str(i) for i in term)}))) as resp:
+		tree = ElementTree.parse(resp)
 
 	for i in tree.findall('.//PubmedArticle'):
 		abstract = [ j.text for j in i.findall('.//Article/Abstract/AbstractText')]
@@ -129,19 +119,6 @@ def get_abstract(*term):
 		else:
 			eloc = ''
 		yield (''.join(abstract), eloc)
-
-def get_pub_link(*term):
-
-	tree = ElementTree.parse(
-			urllib2.urlopen(URLBASE + ABST_FACE,
-			urllib.urlencode({
-				'db':'pubmed',
-				'rettype':'xml', 
-				'id': ','.join(str(i) for i in term)})))
-
-	for i in tree.findall('PubmedArticle//Article/ElocationID'):
-		abstract = [ j.text for j in i.findall('AbstractText')]
-		yield ''.join(abstract)
 
 def print_info(result,verbose=0):
 
@@ -173,8 +150,6 @@ def print_info(result,verbose=0):
 			print result['issn']
 			print 'ESSN: '.ljust(padding), 
 			print result['essn']
-
-		if verbose > 4:
 			print 'Link: '.ljust(padding), 
 			print result['link']
 
@@ -188,6 +163,7 @@ if __name__ == '__main__':
 	import argparse
 	parser = argparse.ArgumentParser()
 	parser.add_argument('-v', '--verbose', action='count', dest='verb')
+	parser.add_argument('-l', '--limit', type=int, default=20, dest='limit')
 	parser.add_argument('TERM', nargs=1)
 
 	args = parser.parse_args()
@@ -197,6 +173,11 @@ if __name__ == '__main__':
 	if not term:
 		raise SystemExit
 
+	uids = get_uid(term)
+
+	if len(uids) > args.limit :
+		raise SystemExit('More than {0} results returned, consider using more specific terms', args.limit)
+
 	result = parse_paper(get_summary(*get_uid(term)))
 
 	if args.verb > 1:
@@ -204,7 +185,10 @@ if __name__ == '__main__':
 		for idx, a in enumerate(get_abstract(*pmids)):
 			result[idx]['abstract'] = a[0]
 			if args.verb > 4:
-				result[idx]['link'] = get_doi_link(a[1])
+				try:
+					result[idx]['link'] = get_doi_link(a[1])
+				except KeyboardInterrupt:
+					result[idx]['link'] = a[1]
 			else:
 				result[idx]['link'] = a[1]
 
