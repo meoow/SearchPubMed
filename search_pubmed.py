@@ -15,6 +15,19 @@ class NoRedirect(urllib2.HTTPErrorProcessor):
 	def http_response(self,  req,  resp):
 		return resp
 
+def get_impact_factor(title='', issn=''):
+	searchurl = 'http://www.medsciediting.com/sci/?action=search'
+	fullname=&issn=0021-972X&impact_factor_b=&impact_factor_s=&rank=number_rank_b&Submit=Search
+	param = {'fullname':'', 
+			'issn':'', 
+			'impact_factor_b':'', 
+			'impact_factor_s':'', 
+			'rank':'number_rank_b', 
+			'Sumit':'Search'}
+	req = urllib2.Request(searchurl)
+	req.add_header('host', 'www.medsciediting.com')
+	req.add_header('referer', 'http://www.medsciediting.com/sci/?action=search')
+
 def get_doi_link(doiterm):
 
 	urlbase = 'http://dx.doi.org'
@@ -105,6 +118,7 @@ def parse_paper(etree):
 	return summ
 
 def get_abstract(*term):
+	'''retrieving all the abstract and doi location of papers for given PMID'''
 	
 	with closing(urllib2.urlopen(URLBASE + ABST_FACE,
 			urllib.urlencode({ 'db':'pubmed', 'rettype':'xml', 
@@ -162,7 +176,9 @@ def print_info(result,verbose=0):
 if __name__ == '__main__':
 	import argparse
 	parser = argparse.ArgumentParser()
+# more '-v's are supplied,  more detailed info given.
 	parser.add_argument('-v', '--verbose', action='count', dest='verb')
+# if the count of results exceeds the limit, the progress aborts.
 	parser.add_argument('-l', '--limit', type=int, default=20, dest='limit')
 	parser.add_argument('TERM', nargs=1)
 
@@ -187,6 +203,7 @@ if __name__ == '__main__':
 			if args.verb > 4:
 				try:
 					result[idx]['link'] = get_doi_link(a[1])
+# if retrieving link from doi is waiting too long, user can cancel this.
 				except KeyboardInterrupt:
 					result[idx]['link'] = a[1]
 			else:
