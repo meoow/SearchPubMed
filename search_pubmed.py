@@ -3,7 +3,9 @@
 import urllib, urllib2, urlparse
 from xml.etree import ElementTree
 import sys
+import re
 from contextlib import closing
+import HTMLParser
 
 URLBASE = 'http://eutils.ncbi.nlm.nih.gov/entrez/eutils/'
 UID_FACE = 'esearch.fcgi'
@@ -15,11 +17,26 @@ class NoRedirect(urllib2.HTTPErrorProcessor):
 	def http_response(self,  req,  resp):
 		return resp
 
+class __MedsciParser(HTMLParser.HTMLParser):
+	issn_ptn = re.compile(r'^\d{4}-\d{3}[\dX]$')
+	next_will_be = False
+	if_ = -1
+	def handle_data(self, data):
+		data = data.strip()
+		if not self.next_will_be:
+			if self.issn_ptn.match(data):
+				self.next_will_be = True
+		else:
+			if data:
+				self.if_ = float(data)
+
 def get_impact_factor(title='', issn=''):
+	if not title and not issn:
+		return 0
+
 	searchurl = 'http://www.medsciediting.com/sci/?action=search'
-	fullname=&issn=0021-972X&impact_factor_b=&impact_factor_s=&rank=number_rank_b&Submit=Search
-	param = {'fullname':'', 
-			'issn':'', 
+	param = {'fullname':title, 
+			'issn':issn, 
 			'impact_factor_b':'', 
 			'impact_factor_s':'', 
 			'rank':'number_rank_b', 
@@ -27,6 +44,18 @@ def get_impact_factor(title='', issn=''):
 	req = urllib2.Request(searchurl)
 	req.add_header('host', 'www.medsciediting.com')
 	req.add_header('referer', 'http://www.medsciediting.com/sci/?action=search')
+	req.add_data(urllib.urlencode(param))
+
+	medsci = __MedsciParser()
+	try:
+		with closing(urllib2.urlopen(req)) as resp:
+			for line in resp:
+				if medsci.if_ < 0:
+					medsci.feed(line)
+	except HTMLParser.HTMLParseError:
+		return 0
+	else:
+		return medsci.if_
 
 def get_doi_link(doiterm):
 
@@ -56,11 +85,9 @@ def get_doi_link(doiterm):
 		if h_cookie is not None:
 			req.add_header('Cookie', h_cookie)
 
-		print req.headers
 
 		with closing(noreopener.open(req)) as resp:
 			post_data = None
-			print resp.code
 			if resp.code in (301, 302, 303):
 				cookie = resp.headers.getheader('set-cookie')
 				if cookie is not None:
@@ -72,7 +99,6 @@ def get_doi_link(doiterm):
 				location = resp.headers.getheader('location')
 				h_host = urlparse.urlparse(location).netloc
 				urlbase = location
-				print urlbase
 			else:
 				break
 
@@ -96,6 +122,8 @@ def parse_paper(etree):
 
 	def check_node(node):
 		if node is None:
+			return ''
+		elif node.text is None:
 			return ''
 		else:
 			return node.text
@@ -160,12 +188,20 @@ def print_info(result,verbose=0):
 			print result['pages']
 
 		if verbose > 3:
-			print 'ISSN: '.ljust(padding), 
-			print result['issn']
-			print 'ESSN: '.ljust(padding), 
-			print result['essn']
-			print 'Link: '.ljust(padding), 
-			print result['link']
+			if result['issn']:
+				print 'ISSN: '.ljust(padding), 
+				print result['issn']
+			if result['essn']:
+				print 'ESSN: '.ljust(padding), 
+				print result['essn']
+			if result['link']:
+				print 'Link: '.ljust(padding), 
+				print result['link']
+
+		if verbose > 5:
+			if result['if']:
+				print 'IF: '.ljust(padding), 
+				print result['if']
 
 		if verbose > 1:
 			print 'Abstract:\n    ', 
@@ -200,7 +236,7 @@ if __name__ == '__main__':
 		pmids = [p['pmid'] for p in result]
 		for idx, a in enumerate(get_abstract(*pmids)):
 			result[idx]['abstract'] = a[0]
-			if args.verb > 4:
+			if args.verb > 4 and a[1]:
 				try:
 					result[idx]['link'] = get_doi_link(a[1])
 # if retrieving link from doi is waiting too long, user can cancel this.
@@ -208,6 +244,9 @@ if __name__ == '__main__':
 					result[idx]['link'] = a[1]
 			else:
 				result[idx]['link'] = a[1]
+	
+			if args.verb > 5:
+				result[idx]['if'] = get_impact_factor(title=result[idx]['source'], issn=result[idx]['issn'])
 
 	for i in result: print_info(i, args.verb)
 
